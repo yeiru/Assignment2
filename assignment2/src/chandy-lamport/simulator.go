@@ -3,10 +3,7 @@ package chandy_lamport
 import (
 	"log"
 	"math/rand"
-	//"time"
-	"fmt"
 	"sync"
-	"strconv"
 )
 
 // Max random delay added to packet delivery
@@ -28,7 +25,6 @@ type Simulator struct {
 	servers        map[string]*Server // key = server ID
 	logger         *Logger
 	// TODO: ADD MORE FIELDS HERE
-	// servers completed
 	wg 	map[int]*sync.WaitGroup
 	SnapshotMessagesMap map[int][]*SnapshotMessage
 }
@@ -85,11 +81,8 @@ func (sim *Simulator) InjectEvent(event interface{}) {
 
 // Advance the simulator time forward by one step, handling all send message events
 // that expire at the new time step, if any.
-func (sim *Simulator) Tick() {
-	
+func (sim *Simulator) Tick() {	
 	sim.time++
-	fmt.Println("===============================================")
-	fmt.Println("Tick SIM Time: " + strconv.Itoa(sim.time))
 	sim.logger.NewEpoch()
 	// Note: to ensure deterministic ordering of packet delivery across the servers,
 	// we must also iterate through the servers and the links in a deterministic way
@@ -98,33 +91,21 @@ func (sim *Simulator) Tick() {
 		for _, dest := range getSortedKeys(server.outboundLinks) {
 			link := server.outboundLinks[dest]
 			// Deliver at most one packet per server at each time step to
-			// establish total ordering of packet delivery to each server
-			fmt.Println("Server to DEST: " + serverId + " " + dest)
-			if !link.events.Empty() {		
-				//fmt.Println("QUEUE NOT EMPTY")						
-				e := link.events.Peek().(SendMessageEvent)
-				fmt.Println(e.message)
-				fmt.Println(e)
-				//fmt.Println("Event R Time: " + strconv.Itoa(e.receiveTime))
+			// establish total ordering of packet delivery to each server			
+			if !link.events.Empty() {						
+				e := link.events.Peek().(SendMessageEvent)	
 				if e.receiveTime <= sim.time {
 					link.events.Pop()
 					sim.logger.RecordEvent(
 						sim.servers[e.dest],
 						ReceivedMessageEvent{e.src, e.dest, e.message})
-					//fmt.Println("Enter")
 					sim.servers[e.dest].HandlePacket(e.src, e.message)
 					
 					break
-				}// else {
-					//fmt.Println("Didnt enter")
-				//}
-			} //else {
-			//	fmt.Println("QUEUE EMPTY")
-			//}
-			//fmt.Println("")
+				}
+			} 
 		}
 	}
-	fmt.Println("===============================================")
 }
 
 // Start a new snapshot process at the specified server
@@ -134,10 +115,6 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 	sim.logger.RecordEvent(sim.servers[serverId], StartSnapshot{serverId, snapshotId})
 	// TODO: IMPLEMENT ME
 	numberOfServers := len(sim.servers)
-	if numberOfServers == 2 {
-		numberOfServers = 1
-	}
-	//fmt.Println("Starting Snapshot IN SIMULATOR with "+strconv.Itoa(numberOfServers))	
 	var wg sync.WaitGroup
 	wg.Add(numberOfServers)
 	sim.wg[snapshotId] = &wg
@@ -149,7 +126,6 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
 	// TODO: IMPLEMENT ME
-	fmt.Println("SNAPSHOT ID " +strconv.Itoa(snapshotId) + " COMPLETE " + serverId + ", ")
 	var wg *sync.WaitGroup
 	wg = sim.wg[snapshotId]
 	wg.Done()
@@ -162,18 +138,8 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	var wg *sync.WaitGroup
 	wg = sim.wg[snapshotId]
 	wg.Wait()
-	
-	fmt.Println("COLLECT SNAPSHOT")
 	serverSnapshots := make(map[string]int)
 	
-	/*
-	type SnapshotState struct {	
-	id       int
-	tokens   map[string]int // key = server ID, value = num tokens
-	messages []*SnapshotMessage
-	}
-	*/
-
 	var messages []*SnapshotMessage
 	for _, serverId := range getSortedKeys(sim.servers) {		
 		server := sim.servers[serverId]		

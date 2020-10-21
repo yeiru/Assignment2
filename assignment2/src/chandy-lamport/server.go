@@ -2,8 +2,6 @@ package chandy_lamport
 
 import (
 	"log"
-	"fmt"
-	"strconv"
 )
 
 // The main participant of the distributed snapshot protocol.
@@ -21,7 +19,7 @@ type Server struct {
 	//Field for remembering if this has been snapshotted
 	SnapshotTokensMap map[int]int
 	alreadySnapshottedMap map[int]bool
-	inSnapshotProcess bool
+	inSnapshotProcess int
 	channelTokensMap map[int]map[string]int
 	channelsQueue map[int]map[string]*Queue
 	SnapshotMessages map[int][]*SnapshotMessage
@@ -46,7 +44,7 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		make(map[string]*Link),
 		make(map[int]int),
 		make(map[int]bool),
-		false,
+		0,
 		make(map[int]map[string]int),
 		make(map[int]map[string]*Queue),
 		make(map[int][]*SnapshotMessage),
@@ -106,181 +104,87 @@ func (server *Server) SendTokens(numTokens int, dest string) {
 // should notify the simulator by calling `sim.NotifySnapshotComplete`.
 func (server *Server) HandlePacket(src string, message interface{}) {
 	// TODO: IMPLEMENT ME
-	
-	// TokenMessage / MarkerMessage
 	server.sim.logger.RecordEvent(server, ReceivedMessageEvent{src, server.Id, message})
-	fmt.Println("****************************")
 	var snapshotId int
 	snapshotId = -1
 	switch messageType := message.(type) {
 	case TokenMessage:
-		
-			fmt.Printf("Received Tokens from %s in %s", src, server.Id)
-			server.Tokens += messageType.numTokens
-			fmt.Println("Number of tokens")
-			fmt.Println(server.Tokens)
-			//fmt.Println("tokens in channel")
-			if server.inSnapshotProcess {
-				server.updateInboundChannel(src, messageType)				
-			}
-			
-
+		server.Tokens += messageType.numTokens
+		if server.inSnapshotProcess > 0 {
+			server.updateInboundChannel(src, messageType)				
+		}
 	case MarkerMessage:
-		fmt.Println("Received Marker in " + server.Id)
 		snapshotId = messageType.snapshotId
-		if _, ok := server.alreadySnapshottedMap[snapshotId]; ok {
-			
-			fmt.Println("Already snapshotted")
+		if _, ok := server.alreadySnapshottedMap[snapshotId]; ok {			
 			server.populateSnapshotMessages(snapshotId, src)
 			if server.snapshotCompletedForServer(snapshotId){
-				fmt.Println("All markers arrived, notify simulator")
-				server.inSnapshotProcess = false
+				server.inSnapshotProcess--
 				server.sim.NotifySnapshotComplete(server.Id, snapshotId)
 			}
-
 		} else {
-			fmt.Println("Server snapshotted and marker sent")
-			server.snapshotServer(snapshotId, src)
+			waitForChannels := server.snapshotServer(snapshotId, src)
 			server.SendToNeighbors(MarkerMessage{snapshotId})
+			if !waitForChannels {
+				server.inSnapshotProcess--
+				server.sim.NotifySnapshotComplete(server.Id, snapshotId)
+			}
 		}
 	default:
 		log.Fatal("Error unknown event: ", messageType)
-	}
-	fmt.Println("****************************")
+	}	
 }
 
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
 	// TODO: IMPLEMENT ME	
-	fmt.Println("Starting Snapshot IN SERVER")
 	server.snapshotServer(snapshotId, "")	
-	server.SendToNeighbors(MarkerMessage{snapshotId})	
+	server.SendToNeighbors(MarkerMessage{snapshotId})		
 }
 
-func (server *Server) snapshotServer(snapshotId int, src string) {	
-	server.inSnapshotProcess = true
+func (server *Server) snapshotServer(snapshotId int, src string) bool {	
+	waitForChannels := false;
 	server.SnapshotTokensMap[snapshotId] = server.Tokens
-	server.alreadySnapshottedMap[snapshotId] = true	
-	for srcKey, _ := range server.outboundLinks {
-		fmt.Println("KEY: " + srcKey)
+	for _, srcKey := range getSortedKeys(server.inboundLinks) {
 		if src != srcKey {
 			queue := NewQueue()
 			queue.Push(SnapshotMessage{server.Id, server.Id, MarkerMessage{snapshotId}})
 			server.channelsQueue[snapshotId] = make(map[string]*Queue)
 			server.channelsQueue[snapshotId][srcKey] = queue
-			fmt.Println("Queue created for Server " + server.Id + ", Src" + srcKey)
-			server.channelsQueue[snapshotId][srcKey].PrintQueue()
 			server.ignoreChannelPerSnapshot[snapshotId] = src
 			server.numberOfChannelsToWait[snapshotId]++
 		}
+	}	
+	
+	if server.numberOfChannelsToWait[snapshotId] != 0 {
+		server.inSnapshotProcess++		
+		server.alreadySnapshottedMap[snapshotId] = true
+		waitForChannels = true
 	}
-	/*if server.numberOfChannelsToWait[snapshotId] == 1 {
-		server.numberOfChannelsToWait[snapshotId] = 0
-	}*/
+	return waitForChannels
 }
 
 func (server *Server) snapshotCompletedForServer(snapshotId int) bool {
-	/*isEmpty := false
-	for _, queue := range server.channelsQueue[snapshotId] {
-		if !queue.Empty() {
-			isEmpty = true
-		}
-	}
-	return isEmpty*/
-
-	return (server.numberOfChannelsToWait[snapshotId] == 0)
-	
+	return (server.numberOfChannelsToWait[snapshotId] == 0)	
 }
 
 func (server *Server) updateInboundChannel(src string, message interface{}) {
-	fmt.Println("IN UPDATE INBOUND CHANNEL")
-	/*for snapshotId, _ := range server.channelsQueue {
-		fmt.Println("In loop SID " + strconv.Itoa(snapshotId))
-		if _, ok := server.channelsQueue[snapshotId]; ok {
-			fmt.Println("MAP EXISTS")
-			if _, ok := server.channelsQueue[snapshotId][src]; ok {
-				fmt.Println("QUEUE EXISTS")
-				if server.channelsQueue[snapshotId][src].Empty() {
-					fmt.Println("QUEUE EMPTY")
-				} else {
-					fmt.Println("QUEUE NOT EMPTY")
-
-					server.channelsQueue[snapshotId][src].PrintQueue()
-				}
-			} else {
-				fmt.Println("QUEUE DOES NOT EXIST")				
-			}
-		} else {
-			fmt.Println("MAP DOES NOT EXIST")
-		}
-		if _, ok := server.channelsQueue[snapshotId][src]; ok && !server.channelsQueue[snapshotId][src].Empty() {
-			fmt.Println("Appended message ")
-			server.channelsQueue[snapshotId][src].Push(SnapshotMessage{src, server.Id, message})
-			//server.channelsQueue[src].printQueue()
-		}
-	}*/
-
-	
 	for snapshotId, snapshotQueues := range server.channelsQueue {
-		fmt.Println("In loop SID " + strconv.Itoa(snapshotId))
-		/*for _, activeChannel := range server.activeChannelPerSnapshot[snapshotId] {
-			fmt.Println(activeChannel)
-		}
-		for _, activeChannel := range server.activeChannelPerSnapshot[snapshotId] {
-			
-			if _, ok := snapshotQueues[src]; ok {
-				snapshotQueues[src].Push(SnapshotMessage{src, server.Id, message})
-				snapshotQueues[src].PrintQueue()
-			}
-
-		}*/
-		if value, ok := server.ignoreChannelPerSnapshot[snapshotId]; ok && value != src {
-			fmt.Println("Source to ignore: " + value)
-			for  queueSrc, channelQueue := range snapshotQueues {
-					
-				
-					fmt.Println("IN QUEUE : " + queueSrc)
+		if value, ok := server.ignoreChannelPerSnapshot[snapshotId]; ok && value != src {			
+			for  _, channelQueue := range snapshotQueues {	
 					channelQueue.Push(SnapshotMessage{src, server.Id, message})
-					channelQueue.PrintQueue()
-					/*if channelQueue.Empty() {
-						fmt.Println("QUEUE EMPTY")
-					} else {
-						fmt.Println("QUEUE NOT EMPTY")
-						
-						channelQueue.Push(SnapshotMessage{src, server.Id, message})
-						channelQueue.PrintQueue()
-					}*/
-				
 			} 
 		}
-	}
-
-	/*fmt.Println("In update channels, source " + src)
-	fmt.Println("Tokens got: " + strconv.Itoa(tokens))
-	fmt.Println("Tokens in map")
-	fmt.Println(strconv.Itoa(server.channelTokensMap[0][src]))*/
-}
-
-func (queue Queue) printQueue() {
-	for !queue.Empty() {
-		fmt.Println(queue.Peek())
-		queue.Pop()
 	}
 }
 
 func (server *Server) populateSnapshotMessages(snapshotId int, src string) {
-	fmt.Println("Empty Queue and populate Snapshot Messages")
 	server.numberOfChannelsToWait[snapshotId]--
 	if _, ok := server.channelsQueue[snapshotId]; ok {
-		fmt.Println("PSM: Snapshot exists")
 		if _, ok := server.channelsQueue[snapshotId][src]; ok {
-			fmt.Println("PSM: Queue for Snapshot exists")
 			for !server.channelsQueue[snapshotId][src].Empty() {
-
 				e := server.channelsQueue[snapshotId][src].Peek().(SnapshotMessage)	
 				server.channelsQueue[snapshotId][src].Pop()		
-				fmt.Println(e)
 				switch messageType := e.message.(type) {
 				case MarkerMessage:
 					continue
